@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Contacts
+import MessageUI
 
 struct ContactsView: View {
     @EnvironmentObject var viewModel: AppViewModel
@@ -15,6 +16,8 @@ struct ContactsView: View {
     @State private var contactToEdit: LocalContact?
     @State private var showDeleteConfirmation = false
     @State private var contactToDelete: LocalContact?
+    @State private var showInviteSMS = false
+    @State private var contactToInvite: LocalContact?
     
     var body: some View {
         NavigationView {
@@ -81,6 +84,15 @@ struct ContactsView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                }
+                                .swipeActions(edge: .leading) {
+                                    Button {
+                                        contactToInvite = contact
+                                        showInviteSMS = true
+                                    } label: {
+                                        Label("Invite", systemImage: "envelope")
+                                    }
+                                    .tint(.blue)
                                 }
                         }
                     }
@@ -157,6 +169,62 @@ struct ContactsView: View {
                     Text("Are you sure you want to remove \(contact.name) from your emergency contacts?")
                 }
             }
+            .sheet(isPresented: $showInviteSMS) {
+                if let contact = contactToInvite {
+                    if MFMessageComposeViewController.canSendText() {
+                        InviteSMSView(contact: contact, userName: viewModel.userName)
+                    } else {
+                        Text("SMS not available on this device")
+                            .padding()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Invite SMS View
+
+struct InviteSMSView: UIViewControllerRepresentable {
+    let contact: LocalContact
+    let userName: String
+    @Environment(\.dismiss) var dismiss
+
+    func makeUIViewController(context: Context) -> MFMessageComposeViewController {
+        let controller = MFMessageComposeViewController()
+        controller.messageComposeDelegate = context.coordinator
+        controller.recipients = [contact.phoneNumber]
+        controller.body = """
+        Hi \(contact.name),
+
+        I'm using the "Are You Safe?" app to check in daily for my safety. I've added you as my emergency contact.
+
+        If I miss a check-in, you'll receive an SMS alert asking you to check on me. This is just a precaution to make sure someone knows if I might need help.
+
+        Thank you for being there for me!
+
+        - \(userName)
+
+        Learn more: https://areyousafe.app
+        """
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: MFMessageComposeViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(dismiss: dismiss)
+    }
+
+    class Coordinator: NSObject, MFMessageComposeViewControllerDelegate {
+        let dismiss: DismissAction
+
+        init(dismiss: DismissAction) {
+            self.dismiss = dismiss
+        }
+
+        func messageComposeViewController(_ controller: MFMessageComposeViewController, didFinishWith result: MessageComposeResult) {
+            dismiss()
         }
     }
 }
@@ -165,7 +233,7 @@ struct ContactsView: View {
 
 struct ContactRow: View {
     let contact: LocalContact
-    
+
     var body: some View {
         HStack(spacing: 12) {
             // Avatar
@@ -173,33 +241,43 @@ struct ContactRow: View {
                 Circle()
                     .fill(levelColor.opacity(0.2))
                     .frame(width: 44, height: 44)
-                
+
                 Text(contact.name.prefix(1).uppercased())
                     .font(.headline)
                     .foregroundColor(levelColor)
             }
-            
+
             // Info
             VStack(alignment: .leading, spacing: 4) {
                 Text(contact.name)
                     .font(.headline)
-                
+
                 HStack(spacing: 8) {
                     Text(contact.relationship)
                         .font(.caption)
                         .foregroundColor(.secondary)
-                    
+
                     Text("•")
                         .foregroundColor(.secondary)
-                    
+
                     Text(formatPhoneNumber(contact.phoneNumber))
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+
+                // Delivery status
+                if let delivery = contact.lastDeliveryStatus {
+                    HStack(spacing: 4) {
+                        deliveryStatusIcon(for: delivery.status)
+                        Text(deliveryStatusText(for: delivery.status))
+                            .font(.caption2)
+                            .foregroundColor(deliveryStatusColor(for: delivery.status))
+                    }
+                }
             }
-            
+
             Spacer()
-            
+
             // Level badge
             Text("L\(contact.level)")
                 .font(.caption)
@@ -209,7 +287,7 @@ struct ContactRow: View {
                 .padding(.vertical, 4)
                 .background(levelColor)
                 .cornerRadius(8)
-            
+
             // Sync status
             if contact.isUploadedForSMS {
                 Image(systemName: "checkmark.circle.fill")
@@ -219,17 +297,65 @@ struct ContactRow: View {
         }
         .padding(.vertical, 4)
     }
-    
+
     private var levelColor: Color {
         contact.level == 1 ? .blue : .orange
     }
-    
+
     private func formatPhoneNumber(_ phone: String) -> String {
         // Show last 4 digits for privacy
         if phone.count > 4 {
             return "•••• " + phone.suffix(4)
         }
         return phone
+    }
+
+    private func deliveryStatusIcon(for status: String) -> some View {
+        let (icon, color) = deliveryIconAndColor(for: status)
+        return Image(systemName: icon)
+            .font(.caption2)
+            .foregroundColor(color)
+    }
+
+    private func deliveryIconAndColor(for status: String) -> (String, Color) {
+        switch status {
+        case "sent", "delivered":
+            return ("checkmark.circle.fill", .green)
+        case "failed":
+            return ("exclamationmark.triangle.fill", .red)
+        case "pending":
+            return ("clock.fill", .orange)
+        default:
+            return ("questionmark.circle", .gray)
+        }
+    }
+
+    private func deliveryStatusText(for status: String) -> String {
+        switch status {
+        case "sent":
+            return "SMS sent"
+        case "delivered":
+            return "SMS delivered"
+        case "failed":
+            return "SMS failed"
+        case "pending":
+            return "SMS pending"
+        default:
+            return status
+        }
+    }
+
+    private func deliveryStatusColor(for status: String) -> Color {
+        switch status {
+        case "sent", "delivered":
+            return .green
+        case "failed":
+            return .red
+        case "pending":
+            return .orange
+        default:
+            return .gray
+        }
     }
 }
 

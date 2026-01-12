@@ -28,7 +28,8 @@ class NotificationService {
     
     func requestPermission() async -> Bool {
         do {
-            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
+            // Request timeSensitive permission for iOS 15+ to bypass Do Not Disturb
+            let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge, .criticalAlert, .providesAppNotificationSettings])
             return granted
         } catch {
             print("Notification permission error: \(error)")
@@ -92,6 +93,12 @@ class NotificationService {
         mainContent.sound = .default
         mainContent.categoryIdentifier = checkinCategoryId
         mainContent.userInfo = ["type": "checkin", "hour": hour, "minute": minute]
+
+        // Set as Time Sensitive to bypass Do Not Disturb (iOS 15+)
+        if #available(iOS 15.0, *) {
+            mainContent.interruptionLevel = .timeSensitive
+            mainContent.relevanceScore = 1.0
+        }
         
         var dateComponents = DateComponents()
         dateComponents.hour = hour
@@ -113,13 +120,19 @@ class NotificationService {
         let reminderMinute = minute + (graceMinutes / 2)
         let reminderHour = hour + (reminderMinute / 60)
         let adjustedMinute = reminderMinute % 60
-        
+
         let reminderContent = UNMutableNotificationContent()
         reminderContent.title = "Reminder: Are You Safe?"
         reminderContent.body = "Please confirm you're safe. Your contacts will be notified if you don't respond."
         reminderContent.sound = .default
         reminderContent.categoryIdentifier = checkinCategoryId
         reminderContent.userInfo = ["type": "reminder", "hour": hour, "minute": minute]
+
+        // Set reminder as Time Sensitive too (iOS 15+)
+        if #available(iOS 15.0, *) {
+            reminderContent.interruptionLevel = .timeSensitive
+            reminderContent.relevanceScore = 1.0
+        }
         
         var reminderComponents = DateComponents()
         reminderComponents.hour = reminderHour % 24

@@ -45,9 +45,11 @@ struct LocalContact: Codable, Identifiable, Equatable {
     var relationship: String  // e.g., "Family", "Friend", "Neighbor"
     var level: Int  // 1 or 2 for escalation priority
     var isUploadedForSMS: Bool
+    var serverContactId: String?  // ID from server after upload
+    var lastDeliveryStatus: ContactDeliveryStatus?
     let createdAt: Date
     var updatedAt: Date
-    
+
     init(id: UUID = UUID(), name: String, phoneNumber: String, relationship: String = "Family", level: Int = 1) {
         self.id = id
         self.name = name
@@ -55,8 +57,27 @@ struct LocalContact: Codable, Identifiable, Equatable {
         self.relationship = relationship
         self.level = level
         self.isUploadedForSMS = false
+        self.serverContactId = nil
+        self.lastDeliveryStatus = nil
         self.createdAt = Date()
         self.updatedAt = Date()
+    }
+
+    static func == (lhs: LocalContact, rhs: LocalContact) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+/// Delivery status for a contact's last SMS alert
+struct ContactDeliveryStatus: Codable, Equatable {
+    let status: String  // "sent", "delivered", "failed", "pending"
+    let sentAt: Date?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case sentAt = "sent_at"
+        case error
     }
 }
 

@@ -153,6 +153,13 @@ class APIService {
         let _: [String: Any] = try await delete(endpoint: "/settings/account")
         keychain.clearAll()
     }
+
+    // MARK: - Push Token
+
+    func updateAPNsToken(_ token: String) async throws {
+        let body: [String: Any] = ["apns_token": token]
+        let _: [String: Bool] = try await put(endpoint: "/user/token", body: body)
+    }
     
     // MARK: - History
     

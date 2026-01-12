@@ -102,20 +102,37 @@ class AppDelegate: NSObject, UIApplicationDelegate {
             if let error = error {
                 print("Notification permission error: \(error)")
             }
+            if granted {
+                DispatchQueue.main.async {
+                    application.registerForRemoteNotifications()
+                }
+            }
         }
-        
+
         return true
     }
-    
+
     func application(
         _ application: UIApplication,
         didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
     ) {
-        // Convert token to string for future push notification support
+        // Convert token to hex string
         let tokenString = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
         print("Device token: \(tokenString)")
+
+        // Upload token to server if user is registered
+        if KeychainService.shared.getAuthToken() != nil {
+            Task {
+                do {
+                    try await APIService.shared.updateAPNsToken(tokenString)
+                    print("APNs token uploaded successfully")
+                } catch {
+                    print("Failed to upload APNs token: \(error)")
+                }
+            }
+        }
     }
-    
+
     func application(
         _ application: UIApplication,
         didFailToRegisterForRemoteNotificationsWithError error: Error

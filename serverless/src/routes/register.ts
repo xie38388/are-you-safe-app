@@ -55,7 +55,11 @@ registerRoutes.post('/register', async (c) => {
         updates.push('sms_alerts_enabled = ?');
         values.push(body.sms_alerts_enabled ? 1 : 0);
       }
-      
+      if (body.apns_token) {
+        updates.push('apns_token = ?');
+        values.push(body.apns_token);
+      }
+
       if (updates.length > 0) {
         updates.push('updated_at = ?');
         values.push(new Date().toISOString());
@@ -86,9 +90,9 @@ registerRoutes.post('/register', async (c) => {
     
     await c.env.DB.prepare(`
       INSERT INTO users (
-        user_id, device_id, timezone, name, checkin_times, 
-        grace_minutes, sms_alerts_enabled, auth_token, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        user_id, device_id, timezone, name, checkin_times,
+        grace_minutes, sms_alerts_enabled, auth_token, apns_token, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       userId,
       body.device_id,
@@ -98,6 +102,7 @@ registerRoutes.post('/register', async (c) => {
       body.grace_minutes || 10,
       body.sms_alerts_enabled ? 1 : 0,
       authToken,
+      body.apns_token || null,
       now,
       now
     ).run();
@@ -209,7 +214,11 @@ registerRoutes.put('/user', async (c) => {
       updates.push('sms_alerts_enabled = ?');
       values.push(body.sms_alerts_enabled ? 1 : 0);
     }
-    
+    if (body.apns_token !== undefined) {
+      updates.push('apns_token = ?');
+      values.push(body.apns_token);
+    }
+
     if (updates.length === 0) {
       return c.json({ error: 'No fields to update' }, 400);
     }
@@ -226,6 +235,47 @@ registerRoutes.put('/user', async (c) => {
     
   } catch (error) {
     console.error('Update user error:', error);
+    return c.json({ error: 'Update failed' }, 500);
+  }
+});
+
+/**
+ * PUT /api/user/token
+ *
+ * Update APNs device token.
+ * Called when app launches or token changes.
+ * Requires authentication.
+ */
+registerRoutes.put('/user/token', async (c) => {
+  const authHeader = c.req.header('Authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  const token = authHeader.substring(7);
+  const user = await c.env.DB.prepare(
+    'SELECT * FROM users WHERE auth_token = ?'
+  ).bind(token).first<User>();
+
+  if (!user) {
+    return c.json({ error: 'Invalid token' }, 401);
+  }
+
+  try {
+    const body = await c.req.json<{ apns_token: string }>();
+
+    if (!body.apns_token) {
+      return c.json({ error: 'apns_token is required' }, 400);
+    }
+
+    await c.env.DB.prepare(
+      'UPDATE users SET apns_token = ?, updated_at = ? WHERE user_id = ?'
+    ).bind(body.apns_token, new Date().toISOString(), user.user_id).run();
+
+    return c.json({ success: true });
+
+  } catch (error) {
+    console.error('Update token error:', error);
     return c.json({ error: 'Update failed' }, 500);
   }
 });
