@@ -87,15 +87,18 @@ class APIService {
     }
     
     // MARK: - Contacts (SMS)
-    
-    func uploadContactsForSMS(contacts: [(phone: String, level: Int)]) async throws {
+
+    func uploadContactsForSMS(contacts: [(phone: String, level: Int)]) async throws -> ContactsUploadResponse {
         let body: [String: Any] = [
             "contacts": contacts.map { ["phone_e164": $0.phone, "level": $0.level] }
         ]
-        
-        let _: [String: Any] = try await post(endpoint: "/contacts/sms", body: body)
+        return try await post(endpoint: "/contacts/sms", body: body)
     }
-    
+
+    func getContactsWithDeliveryStatus() async throws -> ContactsStatusResponse {
+        return try await get(endpoint: "/contacts/sms")
+    }
+
     func deleteContactsForSMS() async throws {
         let _: [String: Bool] = try await delete(endpoint: "/contacts/sms")
     }
@@ -160,7 +163,34 @@ class APIService {
         let body: [String: Any] = ["apns_token": token]
         let _: [String: Bool] = try await put(endpoint: "/user/token", body: body)
     }
-    
+
+    // MARK: - Invites
+
+    func generateInvite(contactId: String? = nil) async throws -> InviteResponse {
+        var body: [String: Any] = [:]
+        if let contactId = contactId {
+            body["contact_id"] = contactId
+        }
+        return try await post(endpoint: "/invite/generate", body: body)
+    }
+
+    func acceptInvite(code: String) async throws -> AcceptInviteResponse {
+        let body: [String: Any] = ["invite_code": code]
+        return try await post(endpoint: "/invite/accept", body: body)
+    }
+
+    func getPendingInvites() async throws -> PendingInvitesResponse {
+        return try await get(endpoint: "/invite/pending")
+    }
+
+    func getLinkedContacts() async throws -> LinkedContactsResponse {
+        return try await get(endpoint: "/contacts/linked")
+    }
+
+    func cancelInvite(code: String) async throws {
+        let _: [String: Bool] = try await delete(endpoint: "/invite/\(code)")
+    }
+
     // MARK: - History
     
     func getHistory(since: Date? = nil, until: Date? = nil, limit: Int = 50) async throws -> HistoryResponse {
@@ -179,7 +209,18 @@ class APIService {
     func getStats() async throws -> StatsResponse {
         return try await get(endpoint: "/history/stats")
     }
-    
+
+    func getExportData(since: Date? = nil, until: Date? = nil) async throws -> ExportData {
+        var queryItems: [URLQueryItem] = []
+        if let since = since {
+            queryItems.append(URLQueryItem(name: "since", value: ISO8601DateFormatter().string(from: since)))
+        }
+        if let until = until {
+            queryItems.append(URLQueryItem(name: "until", value: ISO8601DateFormatter().string(from: until)))
+        }
+        return try await get(endpoint: "/history/export", queryItems: queryItems)
+    }
+
     // MARK: - Private HTTP Methods
     
     private func get<T: Decodable>(endpoint: String, queryItems: [URLQueryItem] = []) async throws -> T {

@@ -116,7 +116,7 @@ settingsRoutes.get('/settings/pause', async (c) => {
 
 /**
  * POST /api/settings/schedule
- * 
+ *
  * Update check-in schedule times.
  */
 settingsRoutes.post('/settings/schedule', async (c) => {
@@ -124,59 +124,122 @@ settingsRoutes.post('/settings/schedule', async (c) => {
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
-  
+
   try {
     const body = await c.req.json<{ times: string[]; grace_minutes?: number }>();
     const now = new Date().toISOString();
-    
+
     // Validate times
     if (!body.times || !Array.isArray(body.times) || body.times.length === 0) {
       return c.json({ error: 'At least one check-in time is required' }, 400);
     }
-    
+
     // Validate time format (HH:MM)
     const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
     for (const time of body.times) {
       if (!timeRegex.test(time)) {
-        return c.json({ 
+        return c.json({
           error: 'Invalid time format',
           message: `Time "${time}" is not in HH:MM format`
         }, 400);
       }
     }
-    
+
     // Validate grace_minutes if provided
     if (body.grace_minutes !== undefined) {
       if (![5, 10, 15, 30].includes(body.grace_minutes)) {
         return c.json({ error: 'grace_minutes must be 5, 10, 15, or 30' }, 400);
       }
     }
-    
+
     // Update schedule
     const updates: string[] = ['checkin_times = ?', 'updated_at = ?'];
     const values: any[] = [JSON.stringify(body.times), now];
-    
+
     if (body.grace_minutes !== undefined) {
       updates.push('grace_minutes = ?');
       values.push(body.grace_minutes);
     }
-    
+
     values.push(user.user_id);
-    
+
     await c.env.DB.prepare(
       `UPDATE users SET ${updates.join(', ')} WHERE user_id = ?`
     ).bind(...values).run();
-    
+
     return c.json({
       success: true,
       checkin_times: body.times,
       grace_minutes: body.grace_minutes || user.grace_minutes
     });
-    
+
   } catch (error) {
     console.error('Schedule update error:', error);
-    return c.json({ 
+    return c.json({
       error: 'Schedule update failed',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/settings/escalation
+ *
+ * Get escalation settings (Level 2 delay).
+ */
+settingsRoutes.get('/settings/escalation', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  return c.json({
+    level2_delay_minutes: user.level2_delay_minutes || 15
+  });
+});
+
+/**
+ * POST /api/settings/escalation
+ *
+ * Update escalation settings.
+ */
+settingsRoutes.post('/settings/escalation', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    const body = await c.req.json<{ level2_delay_minutes?: number }>();
+    const now = new Date().toISOString();
+
+    // Validate level2_delay_minutes if provided
+    if (body.level2_delay_minutes !== undefined) {
+      if (![5, 10, 15, 20, 30].includes(body.level2_delay_minutes)) {
+        return c.json({
+          error: 'Invalid delay',
+          message: 'level2_delay_minutes must be 5, 10, 15, 20, or 30'
+        }, 400);
+      }
+    }
+
+    // Update escalation settings
+    if (body.level2_delay_minutes !== undefined) {
+      await c.env.DB.prepare(`
+        UPDATE users SET level2_delay_minutes = ?, updated_at = ?
+        WHERE user_id = ?
+      `).bind(body.level2_delay_minutes, now, user.user_id).run();
+    }
+
+    return c.json({
+      success: true,
+      level2_delay_minutes: body.level2_delay_minutes || user.level2_delay_minutes || 15
+    });
+
+  } catch (error) {
+    console.error('Escalation settings update error:', error);
+    return c.json({
+      error: 'Settings update failed',
       message: error instanceof Error ? error.message : 'Unknown error'
     }, 500);
   }

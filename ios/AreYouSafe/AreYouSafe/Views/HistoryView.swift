@@ -10,7 +10,8 @@ import SwiftUI
 struct HistoryView: View {
     @EnvironmentObject var viewModel: AppViewModel
     @State private var selectedTab = 0
-    
+    @State private var showExport = false
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -21,7 +22,7 @@ struct HistoryView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding()
-                
+
                 if selectedTab == 0 {
                     historyList
                 } else {
@@ -29,6 +30,13 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showExport = true }) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
             .task {
                 await viewModel.loadHistory()
                 await viewModel.loadStats()
@@ -36,6 +44,9 @@ struct HistoryView: View {
             .refreshable {
                 await viewModel.loadHistory()
                 await viewModel.loadStats()
+            }
+            .sheet(isPresented: $showExport) {
+                ExportView()
             }
         }
     }
@@ -63,7 +74,9 @@ struct HistoryView: View {
                     ForEach(groupedHistory, id: \.key) { date, events in
                         Section {
                             ForEach(events) { event in
-                                HistoryRow(event: event)
+                                NavigationLink(destination: EventDetailView(event: event)) {
+                                    HistoryRow(event: event)
+                                }
                             }
                         } header: {
                             Text(formatSectionDate(date))
@@ -376,6 +389,237 @@ struct StatCard: View {
         .padding()
         .background(color.opacity(0.1))
         .cornerRadius(12)
+    }
+}
+
+// MARK: - Event Detail View
+
+struct EventDetailView: View {
+    let event: CheckinEvent
+
+    private let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        List {
+            // Status Section
+            Section {
+                HStack {
+                    statusIcon
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(statusTitle)
+                            .font(.headline)
+                        Text(statusDescription)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+
+            // Timeline Section
+            Section("Timeline") {
+                // Scheduled time
+                TimelineRow(
+                    icon: "clock",
+                    color: .blue,
+                    title: "Check-in Scheduled",
+                    time: dateFormatter.string(from: event.scheduledTime)
+                )
+
+                // Deadline
+                TimelineRow(
+                    icon: "timer",
+                    color: .orange,
+                    title: "Response Deadline",
+                    time: dateFormatter.string(from: event.deadlineTime)
+                )
+
+                // Snoozed (if applicable)
+                if let snoozedUntil = event.snoozedUntil {
+                    TimelineRow(
+                        icon: "clock.arrow.circlepath",
+                        color: .yellow,
+                        title: "Snoozed Until",
+                        time: timeFormatter.string(from: snoozedUntil)
+                    )
+                }
+
+                // Confirmed (if applicable)
+                if let confirmedAt = event.confirmedAt {
+                    TimelineRow(
+                        icon: "checkmark.circle.fill",
+                        color: .green,
+                        title: "Confirmed Safe",
+                        time: dateFormatter.string(from: confirmedAt),
+                        detail: "Response time: \(responseTime(from: event.scheduledTime, to: confirmedAt))"
+                    )
+                }
+
+                // Escalated (if applicable)
+                if let escalatedAt = event.escalatedAt {
+                    TimelineRow(
+                        icon: "exclamationmark.triangle.fill",
+                        color: .red,
+                        title: "Contacts Alerted",
+                        time: dateFormatter.string(from: escalatedAt),
+                        detail: event.contactsAlertedCount.map { "\($0) contact(s) notified" }
+                    )
+                }
+            }
+
+            // Details Section
+            Section("Details") {
+                DetailRow(label: "Event ID", value: String(event.id.prefix(8)) + "...")
+                DetailRow(label: "Status", value: event.status.rawValue.capitalized)
+                if event.snoozeCount > 0 {
+                    DetailRow(label: "Snooze Count", value: "\(event.snoozeCount)")
+                }
+            }
+
+            // Actions Section (if escalated)
+            if event.status == .alerted {
+                Section {
+                    Text("Your emergency contacts were notified because you didn't respond to this check-in within the grace period. Please contact them to let them know you're okay.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Event Details")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var statusIcon: some View {
+        ZStack {
+            Circle()
+                .fill(statusColor.opacity(0.2))
+                .frame(width: 50, height: 50)
+
+            Image(systemName: statusIconName)
+                .font(.title2)
+                .foregroundColor(statusColor)
+        }
+    }
+
+    private var statusColor: Color {
+        switch event.status {
+        case .confirmed: return .green
+        case .missed, .alerted: return .red
+        case .snoozed: return .yellow
+        case .pending: return .blue
+        case .paused: return .gray
+        }
+    }
+
+    private var statusIconName: String {
+        switch event.status {
+        case .confirmed: return "checkmark.circle.fill"
+        case .missed: return "xmark.circle.fill"
+        case .alerted: return "exclamationmark.triangle.fill"
+        case .snoozed: return "clock.arrow.circlepath"
+        case .pending: return "clock"
+        case .paused: return "pause.circle.fill"
+        }
+    }
+
+    private var statusTitle: String {
+        switch event.status {
+        case .confirmed: return "Confirmed Safe"
+        case .missed: return "Missed Check-in"
+        case .alerted: return "Contacts Alerted"
+        case .snoozed: return "Snoozed"
+        case .pending: return "Pending"
+        case .paused: return "Paused"
+        }
+    }
+
+    private var statusDescription: String {
+        switch event.status {
+        case .confirmed:
+            return "You confirmed your safety for this check-in."
+        case .missed:
+            return "This check-in was missed but contacts were not notified."
+        case .alerted:
+            return "You didn't respond and your emergency contacts were notified."
+        case .snoozed:
+            return "This check-in was delayed."
+        case .pending:
+            return "This check-in is waiting for your response."
+        case .paused:
+            return "Monitoring was paused during this time."
+        }
+    }
+
+    private func responseTime(from scheduled: Date, to confirmed: Date) -> String {
+        let interval = confirmed.timeIntervalSince(scheduled)
+        let minutes = Int(interval / 60)
+
+        if minutes < 1 {
+            return "< 1 minute"
+        } else if minutes == 1 {
+            return "1 minute"
+        } else {
+            return "\(minutes) minutes"
+        }
+    }
+}
+
+// MARK: - Timeline Row
+
+struct TimelineRow: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let time: String
+    var detail: String? = nil
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .foregroundColor(color)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline)
+                Text(time)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                if let detail = detail {
+                    Text(detail)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+// MARK: - Detail Row
+
+struct DetailRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.secondary)
+            Spacer()
+            Text(value)
+        }
     }
 }
 

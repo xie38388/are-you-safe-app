@@ -14,7 +14,8 @@ import { checkinRoutes } from './routes/checkin';
 import { settingsRoutes } from './routes/settings';
 import { historyRoutes } from './routes/history';
 import { debugRoutes } from './routes/debug';
-import { handleScheduledCheckins, handleEscalations, handleRetries } from './cron/scheduler';
+import { inviteRoutes } from './routes/invite';
+import { handleScheduledCheckins, handleEscalations, handleLevel2Escalations, handleRetries, handleDataCleanup } from './cron/scheduler';
 import { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -44,6 +45,7 @@ app.route('/api', checkinRoutes);
 app.route('/api', settingsRoutes);
 app.route('/api', historyRoutes);
 app.route('/api', debugRoutes);
+app.route('/api', inviteRoutes);
 
 // Error handling
 app.onError((err, c) => {
@@ -73,13 +75,19 @@ export default {
     try {
       // 1. Create pending events for users whose check-in time has arrived
       await handleScheduledCheckins(env);
-      
-      // 2. Escalate events that have passed their deadline without response
+
+      // 2. Escalate events that have passed their deadline without response (Level 1)
       await handleEscalations(env);
-      
-      // 3. Retry failed SMS deliveries
+
+      // 3. Handle Level 2 escalations (after configured delay)
+      await handleLevel2Escalations(env);
+
+      // 4. Retry failed SMS deliveries
       await handleRetries(env);
-      
+
+      // 5. Data lifecycle cleanup (runs once daily at midnight UTC)
+      await handleDataCleanup(env);
+
       console.log('Cron completed successfully');
     } catch (error) {
       console.error('Cron error:', error);

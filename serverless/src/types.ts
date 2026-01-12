@@ -27,6 +27,7 @@ export interface User {
   early_reminder_enabled: number;
   early_reminder_minutes: number;
   sms_alerts_enabled: number;
+  level2_delay_minutes: number; // Delay before notifying Level 2 contacts
   pause_until: string | null;
   auth_token: string;
   apns_token: string | null; // APNs device token for remote push
@@ -58,6 +59,8 @@ export interface CheckinEvent {
   snoozed_until: string | null;
   snooze_count: number;
   escalated_at: string | null;
+  escalation_level: number; // 0=none, 1=level1 notified, 2=level2 notified
+  level2_escalated_at: string | null;
   created_at: string;
   updated_at: string;
 }
