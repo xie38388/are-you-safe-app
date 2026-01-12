@@ -15,6 +15,7 @@ import { settingsRoutes } from './routes/settings';
 import { historyRoutes } from './routes/history';
 import { debugRoutes } from './routes/debug';
 import { inviteRoutes } from './routes/invite';
+import { marketingRoutes } from './routes/marketing';
 import { handleScheduledCheckins, handleEscalations, handleLevel2Escalations, handleRetries, handleDataCleanup } from './cron/scheduler';
 import { Env } from './types';
 
@@ -46,6 +47,7 @@ app.route('/api', settingsRoutes);
 app.route('/api', historyRoutes);
 app.route('/api', debugRoutes);
 app.route('/api', inviteRoutes);
+app.route('/', marketingRoutes);
 
 // Error handling
 app.onError((err, c) => {
