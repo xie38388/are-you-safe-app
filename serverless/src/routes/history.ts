@@ -257,3 +257,116 @@ historyRoutes.get('/history/stats', async (c) => {
     return c.json({ error: 'Failed to get stats' }, 500);
   }
 });
+
+/**
+ * GET /api/history/export
+ *
+ * Export check-in history data for download.
+ * Supports JSON and CSV formats.
+ */
+historyRoutes.get('/history/export', async (c) => {
+  const user = await getAuthUser(c);
+  if (!user) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    const format = c.req.query('format') || 'json';
+    const since = c.req.query('since');
+    const until = c.req.query('until');
+
+    // Build query with optional date filters
+    let query = `
+      SELECT
+        e.event_id,
+        e.scheduled_time,
+        e.deadline_time,
+        e.status,
+        e.confirmed_at,
+        e.snoozed_until,
+        e.snooze_count,
+        e.escalated_at,
+        e.escalation_level,
+        e.created_at
+      FROM checkin_events e
+      WHERE e.user_id = ?
+    `;
+    const params: any[] = [user.user_id];
+
+    if (since) {
+      query += ' AND e.scheduled_time >= ?';
+      params.push(since);
+    }
+
+    if (until) {
+      query += ' AND e.scheduled_time <= ?';
+      params.push(until);
+    }
+
+    query += ' ORDER BY e.scheduled_time DESC';
+
+    const events = await c.env.DB.prepare(query).bind(...params).all<CheckinEvent>();
+
+    // Get stats
+    const stats = await c.env.DB.prepare(`
+      SELECT
+        status,
+        COUNT(*) as count
+      FROM checkin_events
+      WHERE user_id = ?
+      GROUP BY status
+    `).bind(user.user_id).all();
+
+    const statusCounts: Record<string, number> = {};
+    for (const row of stats.results as any[]) {
+      statusCounts[row.status] = row.count;
+    }
+
+    // Format data for export
+    const exportData = {
+      user: {
+        name: user.name,
+        timezone: user.timezone,
+        created_at: user.created_at
+      },
+      export_date: new Date().toISOString(),
+      summary: {
+        total_events: events.results.length,
+        confirmed: statusCounts['confirmed'] || 0,
+        missed: statusCounts['missed'] || 0,
+        alerted: statusCounts['alerted'] || 0,
+        snoozed: statusCounts['snoozed'] || 0
+      },
+      events: events.results.map((e: any) => ({
+        date: e.scheduled_time.split('T')[0],
+        scheduled_time: e.scheduled_time,
+        deadline_time: e.deadline_time,
+        status: e.status,
+        confirmed_at: e.confirmed_at || '',
+        escalated_at: e.escalated_at || '',
+        snooze_count: e.snooze_count || 0
+      }))
+    };
+
+    if (format === 'csv') {
+      // Generate CSV
+      const csvHeader = 'Date,Scheduled Time,Deadline,Status,Confirmed At,Escalated At,Snooze Count\n';
+      const csvRows = exportData.events.map((e: any) =>
+        `${e.date},${e.scheduled_time},${e.deadline_time},${e.status},${e.confirmed_at},${e.escalated_at},${e.snooze_count}`
+      ).join('\n');
+
+      return new Response(csvHeader + csvRows, {
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': `attachment; filename="are-you-safe-export-${new Date().toISOString().split('T')[0]}.csv"`
+        }
+      });
+    }
+
+    return c.json(exportData);
+
+  } catch (error) {
+    console.error('Export error:', error);
+    return c.json({ error: 'Failed to export data' }, 500);
+  }
+});

@@ -10,7 +10,8 @@ import SwiftUI
 struct HistoryView: View {
     @EnvironmentObject var viewModel: AppViewModel
     @State private var selectedTab = 0
-    
+    @State private var showExport = false
+
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
@@ -21,7 +22,7 @@ struct HistoryView: View {
                 }
                 .pickerStyle(.segmented)
                 .padding()
-                
+
                 if selectedTab == 0 {
                     historyList
                 } else {
@@ -29,6 +30,13 @@ struct HistoryView: View {
                 }
             }
             .navigationTitle("History")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showExport = true }) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+            }
             .task {
                 await viewModel.loadHistory()
                 await viewModel.loadStats()
@@ -36,6 +44,9 @@ struct HistoryView: View {
             .refreshable {
                 await viewModel.loadHistory()
                 await viewModel.loadStats()
+            }
+            .sheet(isPresented: $showExport) {
+                ExportView()
             }
         }
     }

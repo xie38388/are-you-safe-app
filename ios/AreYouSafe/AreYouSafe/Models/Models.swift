@@ -195,7 +195,7 @@ struct StatsResponse: Codable {
     let alerted: Int
     let snoozed: Int
     let currentStreak: Int
-    
+
     enum CodingKeys: String, CodingKey {
         case totalCheckins = "total_checkins"
         case confirmed
@@ -203,6 +203,133 @@ struct StatsResponse: Codable {
         case alerted
         case snoozed
         case currentStreak = "current_streak"
+    }
+}
+
+// MARK: - Invite Response Models
+
+struct InviteResponse: Codable {
+    let success: Bool
+    let inviteCode: String
+    let inviteUrl: String
+    let expiresAt: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case inviteCode = "invite_code"
+        case inviteUrl = "invite_url"
+        case expiresAt = "expires_at"
+        case message
+    }
+}
+
+struct AcceptInviteResponse: Codable {
+    let success: Bool
+    let linkedTo: String
+    let message: String
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case linkedTo = "linked_to"
+        case message
+    }
+}
+
+struct PendingInvite: Codable, Identifiable {
+    let id: String
+    let inviteCode: String
+    let contactId: String?
+    let expiresAt: String
+    let createdAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case id = "invite_id"
+        case inviteCode = "invite_code"
+        case contactId = "contact_id"
+        case expiresAt = "expires_at"
+        case createdAt = "created_at"
+    }
+}
+
+struct PendingInvitesResponse: Codable {
+    let invites: [PendingInvite]
+    let count: Int
+}
+
+struct LinkedContact: Codable, Identifiable {
+    let id: String
+    let level: Int
+    let createdAt: String
+    let linkedUserName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "contact_id"
+        case level
+        case createdAt = "created_at"
+        case linkedUserName = "linked_user_name"
+    }
+}
+
+struct LinkedContactsResponse: Codable {
+    let contacts: [LinkedContact]
+    let count: Int
+}
+
+// MARK: - Contact Status Response Models
+
+struct ContactsUploadResponse: Codable {
+    let success: Bool
+    let contactsCount: Int
+    let contacts: [UploadedContact]
+
+    enum CodingKeys: String, CodingKey {
+        case success
+        case contactsCount = "contacts_count"
+        case contacts
+    }
+}
+
+struct UploadedContact: Codable {
+    let contactId: String
+    let level: Int
+
+    enum CodingKeys: String, CodingKey {
+        case contactId = "contact_id"
+        case level
+    }
+}
+
+struct ContactsStatusResponse: Codable {
+    let contacts: [ServerContact]
+    let count: Int
+}
+
+struct ServerContact: Codable, Identifiable {
+    let id: String
+    let level: Int
+    let hasApp: Bool
+    let createdAt: String
+    let lastDelivery: LastDelivery?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "contact_id"
+        case level
+        case hasApp = "has_app"
+        case createdAt = "created_at"
+        case lastDelivery = "last_delivery"
+    }
+}
+
+struct LastDelivery: Codable {
+    let status: String
+    let sentAt: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case sentAt = "sent_at"
+        case error
     }
 }
 

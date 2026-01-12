@@ -154,16 +154,17 @@ export async function handleEscalations(env: Env): Promise<void> {
 
 /**
  * Trigger escalation for a specific event
- * Sends SMS to all contacts
+ * Multi-level escalation: Level 1 contacts notified first, Level 2 after delay
  */
-export async function triggerEscalation(env: Env, eventId: string): Promise<{
+export async function triggerEscalation(env: Env, eventId: string, targetLevel: number = 1): Promise<{
   event_id: string;
   contacts_notified: number;
+  escalation_level: number;
   deliveries: { contact_id: string; status: string; error?: string }[];
 }> {
   const now = new Date();
   const nowStr = now.toISOString();
-  
+
   // Get the event with user info
   const event = await env.DB.prepare(`
     SELECT e.*, u.name as user_name, u.sms_alerts_enabled
@@ -171,46 +172,63 @@ export async function triggerEscalation(env: Env, eventId: string): Promise<{
     JOIN users u ON e.user_id = u.user_id
     WHERE e.event_id = ?
   `).bind(eventId).first<CheckinEvent & { user_name: string; sms_alerts_enabled: number }>();
-  
+
   if (!event) {
     throw new Error('Event not found');
   }
-  
-  // Update event status to alerted
-  await env.DB.prepare(`
-    UPDATE checkin_events 
-    SET status = 'alerted', escalated_at = ?, updated_at = ?
-    WHERE event_id = ?
-  `).bind(nowStr, nowStr, eventId).run();
-  
-  // Log the escalation
-  await logEvent(env.DB, event.user_id, eventId, 'checkin_escalated', nowStr, 'missed');
-  
+
   const deliveries: { contact_id: string; status: string; error?: string }[] = [];
-  
+
+  // Update event status based on escalation level
+  if (targetLevel === 1) {
+    // First escalation - update to alerted status
+    await env.DB.prepare(`
+      UPDATE checkin_events
+      SET status = 'alerted', escalated_at = ?, escalation_level = 1, updated_at = ?
+      WHERE event_id = ?
+    `).bind(nowStr, nowStr, eventId).run();
+
+    // Log the escalation
+    await logEvent(env.DB, event.user_id, eventId, 'checkin_escalated', nowStr, 'missed', {
+      escalation_level: 1
+    });
+  } else if (targetLevel === 2) {
+    // Level 2 escalation
+    await env.DB.prepare(`
+      UPDATE checkin_events
+      SET escalation_level = 2, level2_escalated_at = ?, updated_at = ?
+      WHERE event_id = ?
+    `).bind(nowStr, nowStr, eventId).run();
+
+    // Log Level 2 escalation
+    await logEvent(env.DB, event.user_id, eventId, 'level2_escalated', nowStr, 'ok', {
+      escalation_level: 2
+    });
+  }
+
   // Check if SMS alerts are enabled
   if (!event.sms_alerts_enabled) {
     console.log(`SMS alerts not enabled for user ${event.user_id}`);
-    return { event_id: eventId, contacts_notified: 0, deliveries };
+    return { event_id: eventId, contacts_notified: 0, escalation_level: targetLevel, deliveries };
   }
-  
-  // Get all contacts for this user
+
+  // Get contacts for the target level
   const contacts = await env.DB.prepare(`
-    SELECT * FROM contacts WHERE user_id = ? ORDER BY level ASC
-  `).bind(event.user_id).all<Contact>();
-  
+    SELECT * FROM contacts WHERE user_id = ? AND level = ? ORDER BY created_at ASC
+  `).bind(event.user_id, targetLevel).all<Contact>();
+
   if (contacts.results.length === 0) {
-    console.log(`No contacts found for user ${event.user_id}`);
-    return { event_id: eventId, contacts_notified: 0, deliveries };
+    console.log(`No Level ${targetLevel} contacts found for user ${event.user_id}`);
+    return { event_id: eventId, contacts_notified: 0, escalation_level: targetLevel, deliveries };
   }
-  
+
   // Generate alert message
   const message = generateAlertMessage(event.user_name || 'Your contact', event.scheduled_time);
-  
-  // Send SMS and/or push notifications to all contacts (MVP: all at once, no level-based delay)
+
+  // Send notifications to contacts at this level
   for (const contact of contacts.results) {
     try {
-      // Check if SMS delivery already exists (idempotency)
+      // Check if delivery already exists (idempotency)
       const existingDelivery = await env.DB.prepare(`
         SELECT delivery_id FROM alert_deliveries
         WHERE event_id = ? AND contact_id = ? AND channel = 'sms'
@@ -231,7 +249,7 @@ export async function triggerEscalation(env: Env, eventId: string): Promise<{
             scheduledTime: event.scheduled_time,
             env,
           });
-          console.log(`Push notification sent to contact ${contact.contact_id}`);
+          console.log(`Push notification sent to Level ${targetLevel} contact ${contact.contact_id}`);
 
           // Record push delivery
           const pushDeliveryId = generateUUID();
@@ -268,7 +286,7 @@ export async function triggerEscalation(env: Env, eventId: string): Promise<{
         `).bind(result.sid, result.status, nowStr, nowStr, deliveryId).run();
 
         deliveries.push({ contact_id: contact.contact_id, status: 'sent' });
-        console.log(`SMS sent to contact ${contact.contact_id}`);
+        console.log(`SMS sent to Level ${targetLevel} contact ${contact.contact_id}`);
       } else {
         // Update delivery as failed with retry
         const nextRetry = calculateNextRetry(0);
@@ -291,17 +309,74 @@ export async function triggerEscalation(env: Env, eventId: string): Promise<{
       });
     }
   }
-  
+
   // Log contacts alerted
-  await logEvent(env.DB, event.user_id, eventId, 'contacts_alerted', nowStr, 'ok', {
-    contacts_count: deliveries.filter(d => d.status === 'sent').length
+  await logEvent(env.DB, event.user_id, eventId, `level${targetLevel}_contacts_alerted`, nowStr, 'ok', {
+    contacts_count: deliveries.filter(d => d.status === 'sent').length,
+    level: targetLevel
   });
-  
+
   return {
     event_id: eventId,
     contacts_notified: deliveries.filter(d => d.status === 'sent').length,
+    escalation_level: targetLevel,
     deliveries
   };
+}
+
+/**
+ * Handle Level 2 escalations
+ * Sends SMS alerts to Level 2 contacts after the configured delay
+ */
+export async function handleLevel2Escalations(env: Env): Promise<void> {
+  const now = new Date();
+
+  console.log('Checking for Level 2 escalations');
+
+  // Find events that:
+  // 1. Are in 'alerted' status
+  // 2. Have escalation_level = 1 (Level 1 was notified but not Level 2)
+  // 3. Sufficient time has passed since Level 1 escalation
+  // 4. User still hasn't confirmed (still alerted status)
+  const pendingLevel2 = await env.DB.prepare(`
+    SELECT e.*, u.name as user_name, u.sms_alerts_enabled, u.level2_delay_minutes
+    FROM checkin_events e
+    JOIN users u ON e.user_id = u.user_id
+    WHERE e.status = 'alerted'
+    AND (e.escalation_level IS NULL OR e.escalation_level = 1)
+    AND e.escalated_at IS NOT NULL
+    AND (u.pause_until IS NULL OR u.pause_until < ?)
+  `).bind(now.toISOString()).all();
+
+  for (const event of pendingLevel2.results as any[]) {
+    try {
+      // Check if enough time has passed since Level 1 escalation
+      const escalatedAt = new Date(event.escalated_at);
+      const delayMinutes = event.level2_delay_minutes || 15;
+      const level2Time = new Date(escalatedAt.getTime() + delayMinutes * 60 * 1000);
+
+      if (now >= level2Time) {
+        // Check if there are Level 2 contacts
+        const level2Contacts = await env.DB.prepare(`
+          SELECT COUNT(*) as count FROM contacts WHERE user_id = ? AND level = 2
+        `).bind(event.user_id).first<{ count: number }>();
+
+        if (level2Contacts && level2Contacts.count > 0) {
+          console.log(`Triggering Level 2 escalation for event ${event.event_id}`);
+          await triggerEscalation(env, event.event_id, 2);
+        } else {
+          // No Level 2 contacts, mark as fully escalated
+          await env.DB.prepare(`
+            UPDATE checkin_events SET escalation_level = 2, updated_at = ?
+            WHERE event_id = ?
+          `).bind(now.toISOString(), event.event_id).run();
+          console.log(`No Level 2 contacts for event ${event.event_id}, marking as fully escalated`);
+        }
+      }
+    } catch (error) {
+      console.error(`Error handling Level 2 escalation for event ${event.event_id}:`, error);
+    }
+  }
 }
 
 /**

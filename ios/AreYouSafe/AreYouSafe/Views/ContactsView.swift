@@ -18,6 +18,7 @@ struct ContactsView: View {
     @State private var contactToDelete: LocalContact?
     @State private var showInviteSMS = false
     @State private var contactToInvite: LocalContact?
+    @State private var showAppLinking = false
     
     var body: some View {
         NavigationView {
@@ -115,7 +116,7 @@ struct ContactsView: View {
                     Section {
                         let uploadedCount = viewModel.contacts.filter { $0.isUploadedForSMS }.count
                         let totalCount = viewModel.contacts.count
-                        
+
                         if uploadedCount < totalCount {
                             Button(action: {
                                 Task {
@@ -138,6 +139,33 @@ struct ContactsView: View {
                             }
                         }
                     }
+                }
+
+                // App linking section
+                Section {
+                    Button(action: {
+                        showAppLinking = true
+                    }) {
+                        HStack {
+                            Image(systemName: "link.circle.fill")
+                                .foregroundColor(.purple)
+                            VStack(alignment: .leading) {
+                                Text("App Linking")
+                                    .foregroundColor(.primary)
+                                Text("Invite contacts to install the app")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                } header: {
+                    Text("Push Notifications")
+                } footer: {
+                    Text("Contacts with the app installed will receive push notifications instead of SMS alerts.")
                 }
             }
             .navigationTitle("Contacts")
@@ -178,6 +206,9 @@ struct ContactsView: View {
                             .padding()
                     }
                 }
+            }
+            .sheet(isPresented: $showAppLinking) {
+                InviteView()
             }
         }
     }

@@ -145,15 +145,15 @@ class AppViewModel: ObservableObject {
     
     func refreshUserData() async {
         guard isRegistered else { return }
-        
+
         do {
             let user = try await api.getUser()
-            
+
             userName = user.name
             checkinTimes = user.checkinTimes
             graceMinutes = user.graceMinutes
             smsAlertsEnabled = user.smsAlertsEnabled
-            
+
             if let pauseUntilDate = user.pauseUntil, pauseUntilDate > Date() {
                 isPaused = true
                 pauseUntil = pauseUntilDate
@@ -161,13 +161,16 @@ class AppViewModel: ObservableObject {
                 isPaused = false
                 pauseUntil = nil
             }
-            
+
             // Refresh current check-in status
             await refreshCurrentCheckin()
-            
+
             // Sync pending confirmations
             await api.syncPendingConfirmations()
-            
+
+            // Sync contact delivery statuses
+            await syncContactDeliveryStatus()
+
         } catch {
             print("Failed to refresh user data: \(error)")
         }
@@ -394,22 +397,60 @@ class AppViewModel: ObservableObject {
             showError(message: "Please enable SMS alerts first")
             return
         }
-        
+
         isLoading = true
         defer { isLoading = false }
-        
+
         do {
             let contactsToUpload = contacts.map { ($0.phoneNumber, $0.level) }
-            try await api.uploadContactsForSMS(contacts: contactsToUpload)
-            
-            // Mark contacts as uploaded
-            for i in contacts.indices {
-                contacts[i].isUploadedForSMS = true
+            let response = try await api.uploadContactsForSMS(contacts: contactsToUpload)
+
+            // Mark contacts as uploaded with server IDs
+            for uploadedContact in response.contacts {
+                // Find local contact by level (since we don't have server ID yet)
+                if let index = contacts.firstIndex(where: { $0.level == uploadedContact.level && $0.serverContactId == nil }) {
+                    contacts[index].isUploadedForSMS = true
+                    contacts[index].serverContactId = uploadedContact.contactId
+                }
             }
             saveContacts()
-            
+
         } catch {
             showError(message: "Failed to upload contacts: \(error.localizedDescription)")
+        }
+    }
+
+    /// Sync contact delivery statuses from server
+    func syncContactDeliveryStatus() async {
+        guard smsAlertsEnabled else { return }
+
+        do {
+            let response = try await api.getContactsWithDeliveryStatus()
+
+            // Update local contacts with delivery status
+            for serverContact in response.contacts {
+                if let index = contacts.firstIndex(where: { $0.serverContactId == serverContact.id }) {
+                    if let delivery = serverContact.lastDelivery {
+                        let formatter = ISO8601DateFormatter()
+                        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                        let sentAt = delivery.sentAt.flatMap { formatter.date(from: $0) }
+                            ?? delivery.sentAt.flatMap { str -> Date? in
+                                formatter.formatOptions = [.withInternetDateTime]
+                                return formatter.date(from: str)
+                            }
+
+                        contacts[index].lastDeliveryStatus = ContactDeliveryStatus(
+                            status: delivery.status,
+                            sentAt: sentAt,
+                            error: delivery.error
+                        )
+                    }
+                }
+            }
+            saveContacts()
+
+        } catch {
+            print("Failed to sync contact delivery status: \(error)")
         }
     }
     
