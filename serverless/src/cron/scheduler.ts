@@ -408,3 +408,66 @@ async function logEvent(
     new Date().toISOString()
   ).run();
 }
+
+/**
+ * Data lifecycle management - cleanup old data
+ * Runs daily to remove data older than retention period
+ */
+export async function handleDataCleanup(env: Env): Promise<{
+  eventsDeleted: number;
+  logsDeleted: number;
+  deliveriesDeleted: number;
+}> {
+  const now = new Date();
+
+  // Only run cleanup once per day (at midnight UTC hour)
+  if (now.getUTCHours() !== 0 || now.getUTCMinutes() > 5) {
+    return { eventsDeleted: 0, logsDeleted: 0, deliveriesDeleted: 0 };
+  }
+
+  console.log('Running data cleanup...');
+
+  // Retention periods (in days)
+  const EVENT_RETENTION_DAYS = 180; // 6 months
+  const LOG_RETENTION_DAYS = 90;    // 3 months
+  const DELIVERY_RETENTION_DAYS = 30; // 1 month
+
+  const eventCutoff = new Date(now.getTime() - EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const logCutoff = new Date(now.getTime() - LOG_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const deliveryCutoff = new Date(now.getTime() - DELIVERY_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  let eventsDeleted = 0;
+  let logsDeleted = 0;
+  let deliveriesDeleted = 0;
+
+  try {
+    // Delete old check-in events (keep recent ones for history)
+    const eventResult = await env.DB.prepare(`
+      DELETE FROM checkin_events
+      WHERE created_at < ?
+      AND status NOT IN ('pending', 'snoozed')
+    `).bind(eventCutoff).run();
+    eventsDeleted = eventResult.meta.changes || 0;
+
+    // Delete old event logs
+    const logResult = await env.DB.prepare(`
+      DELETE FROM event_logs
+      WHERE created_at < ?
+    `).bind(logCutoff).run();
+    logsDeleted = logResult.meta.changes || 0;
+
+    // Delete old alert deliveries
+    const deliveryResult = await env.DB.prepare(`
+      DELETE FROM alert_deliveries
+      WHERE created_at < ?
+    `).bind(deliveryCutoff).run();
+    deliveriesDeleted = deliveryResult.meta.changes || 0;
+
+    console.log(`Cleanup complete: ${eventsDeleted} events, ${logsDeleted} logs, ${deliveriesDeleted} deliveries deleted`);
+
+  } catch (error) {
+    console.error('Data cleanup error:', error);
+  }
+
+  return { eventsDeleted, logsDeleted, deliveriesDeleted };
+}

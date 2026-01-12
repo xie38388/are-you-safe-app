@@ -7,6 +7,7 @@
 
 import SwiftUI
 import UserNotifications
+import AppIntents
 
 @main
 struct AreYouSafeApp: App {

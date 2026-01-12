@@ -14,7 +14,7 @@ import { checkinRoutes } from './routes/checkin';
 import { settingsRoutes } from './routes/settings';
 import { historyRoutes } from './routes/history';
 import { debugRoutes } from './routes/debug';
-import { handleScheduledCheckins, handleEscalations, handleRetries } from './cron/scheduler';
+import { handleScheduledCheckins, handleEscalations, handleRetries, handleDataCleanup } from './cron/scheduler';
 import { Env } from './types';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -73,13 +73,16 @@ export default {
     try {
       // 1. Create pending events for users whose check-in time has arrived
       await handleScheduledCheckins(env);
-      
+
       // 2. Escalate events that have passed their deadline without response
       await handleEscalations(env);
-      
+
       // 3. Retry failed SMS deliveries
       await handleRetries(env);
-      
+
+      // 4. Data lifecycle cleanup (runs once daily at midnight UTC)
+      await handleDataCleanup(env);
+
       console.log('Cron completed successfully');
     } catch (error) {
       console.error('Cron error:', error);
