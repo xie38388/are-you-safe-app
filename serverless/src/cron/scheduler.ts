@@ -10,6 +10,7 @@
 import { Env, User, CheckinEvent, Contact, AlertDelivery } from '../types';
 import { generateUUID, decrypt } from '../utils/crypto';
 import { sendSMS, generateAlertMessage, calculateNextRetry } from '../services/twilio';
+import { sendCheckinReminder, sendCheckinReminderFollowup, sendContactAlert } from '../services/apns';
 
 /**
  * Handle scheduled check-ins
@@ -69,20 +70,20 @@ export async function handleScheduledCheckins(env: Env): Promise<void> {
 async function createPendingEvent(env: Env, user: User, timeStr: string): Promise<void> {
   const now = new Date();
   const eventId = generateUUID();
-  
+
   // Parse the scheduled time for today in user's timezone
   // For simplicity, we'll use UTC and let the client handle timezone display
   const [hours, minutes] = timeStr.split(':').map(Number);
   const scheduledTime = new Date(now);
   scheduledTime.setHours(hours, minutes, 0, 0);
-  
+
   // If the scheduled time is in the past (edge case), skip
   if (scheduledTime < now) {
     return;
   }
-  
+
   const deadlineTime = new Date(scheduledTime.getTime() + user.grace_minutes * 60 * 1000);
-  
+
   await env.DB.prepare(`
     INSERT INTO checkin_events (
       event_id, user_id, scheduled_time, deadline_time,
@@ -96,9 +97,26 @@ async function createPendingEvent(env: Env, user: User, timeStr: string): Promis
     now.toISOString(),
     now.toISOString()
   ).run();
-  
+
   console.log(`Created pending event ${eventId} for user ${user.user_id} at ${scheduledTime.toISOString()}`);
-  
+
+  // Send remote push notification as backup to local notification
+  if (user.apns_token) {
+    try {
+      await sendCheckinReminder({
+        deviceToken: user.apns_token,
+        userName: user.name,
+        graceMinutes: user.grace_minutes,
+        eventId: eventId,
+        scheduledTime: scheduledTime.toISOString(),
+        env,
+      });
+      console.log(`Sent push notification to user ${user.user_id}`);
+    } catch (error) {
+      console.error(`Failed to send push notification to user ${user.user_id}:`, error);
+    }
+  }
+
   // Log the event
   await logEvent(env.DB, user.user_id, eventId, 'checkin_scheduled', now.toISOString(), 'ok', {
     scheduled_time: scheduledTime.toISOString(),
@@ -189,64 +207,87 @@ export async function triggerEscalation(env: Env, eventId: string): Promise<{
   // Generate alert message
   const message = generateAlertMessage(event.user_name || 'Your contact', event.scheduled_time);
   
-  // Send SMS to all contacts (MVP: all at once, no level-based delay)
+  // Send SMS and/or push notifications to all contacts (MVP: all at once, no level-based delay)
   for (const contact of contacts.results) {
     try {
-      // Check if delivery already exists (idempotency)
+      // Check if SMS delivery already exists (idempotency)
       const existingDelivery = await env.DB.prepare(`
-        SELECT delivery_id FROM alert_deliveries 
+        SELECT delivery_id FROM alert_deliveries
         WHERE event_id = ? AND contact_id = ? AND channel = 'sms'
       `).bind(eventId, contact.contact_id).first();
-      
+
       if (existingDelivery) {
         console.log(`Delivery already exists for event ${eventId}, contact ${contact.contact_id}`);
         deliveries.push({ contact_id: contact.contact_id, status: 'already_exists' });
         continue;
       }
-      
+
+      // Send push notification if contact has the app installed
+      if (contact.has_app && contact.apns_token) {
+        try {
+          await sendContactAlert({
+            deviceToken: contact.apns_token,
+            userName: event.user_name || 'Your contact',
+            scheduledTime: event.scheduled_time,
+            env,
+          });
+          console.log(`Push notification sent to contact ${contact.contact_id}`);
+
+          // Record push delivery
+          const pushDeliveryId = generateUUID();
+          await env.DB.prepare(`
+            INSERT INTO alert_deliveries (
+              delivery_id, event_id, contact_id, channel, status, sent_at, created_at, updated_at
+            ) VALUES (?, ?, ?, 'push', 'sent', ?, ?, ?)
+          `).bind(pushDeliveryId, eventId, contact.contact_id, nowStr, nowStr, nowStr).run();
+        } catch (pushError) {
+          console.error(`Push notification failed for contact ${contact.contact_id}:`, pushError);
+        }
+      }
+
       // Decrypt phone number
       const phone = await decrypt(contact.phone_enc, env.ENCRYPTION_KEY);
-      
-      // Create delivery record
+
+      // Create SMS delivery record
       const deliveryId = generateUUID();
       await env.DB.prepare(`
         INSERT INTO alert_deliveries (
           delivery_id, event_id, contact_id, channel, status, created_at, updated_at
         ) VALUES (?, ?, ?, 'sms', 'pending', ?, ?)
       `).bind(deliveryId, eventId, contact.contact_id, nowStr, nowStr).run();
-      
+
       // Send SMS
       const result = await sendSMS({ to: phone, body: message, env });
-      
+
       if (result.success) {
         // Update delivery as sent
         await env.DB.prepare(`
-          UPDATE alert_deliveries 
+          UPDATE alert_deliveries
           SET status = 'sent', provider_ref = ?, provider_status = ?, sent_at = ?, updated_at = ?
           WHERE delivery_id = ?
         `).bind(result.sid, result.status, nowStr, nowStr, deliveryId).run();
-        
+
         deliveries.push({ contact_id: contact.contact_id, status: 'sent' });
         console.log(`SMS sent to contact ${contact.contact_id}`);
       } else {
         // Update delivery as failed with retry
         const nextRetry = calculateNextRetry(0);
         await env.DB.prepare(`
-          UPDATE alert_deliveries 
+          UPDATE alert_deliveries
           SET status = 'failed', error_message = ?, next_retry_at = ?, updated_at = ?
           WHERE delivery_id = ?
         `).bind(result.errorMessage, nextRetry, nowStr, deliveryId).run();
-        
+
         deliveries.push({ contact_id: contact.contact_id, status: 'failed', error: result.errorMessage });
         console.error(`SMS failed for contact ${contact.contact_id}: ${result.errorMessage}`);
       }
-      
+
     } catch (error) {
       console.error(`Error sending to contact ${contact.contact_id}:`, error);
-      deliveries.push({ 
-        contact_id: contact.contact_id, 
-        status: 'error', 
-        error: error instanceof Error ? error.message : 'Unknown error' 
+      deliveries.push({
+        contact_id: contact.contact_id,
+        status: 'error',
+        error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   }

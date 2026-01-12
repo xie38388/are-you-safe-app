@@ -113,30 +113,55 @@ contactsRoutes.post('/contacts/sms', async (c) => {
 
 /**
  * GET /api/contacts/sms
- * 
- * Get list of SMS-enabled contacts (without phone numbers for privacy).
+ *
+ * Get list of SMS-enabled contacts with delivery status (without phone numbers for privacy).
  */
 contactsRoutes.get('/contacts/sms', async (c) => {
   const user = await getAuthUser(c);
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
-  
+
   try {
-    const contacts = await c.env.DB.prepare(
-      'SELECT contact_id, level, has_app, created_at FROM contacts WHERE user_id = ?'
-    ).bind(user.user_id).all<Contact>();
-    
+    // Get contacts with their latest delivery status
+    const contacts = await c.env.DB.prepare(`
+      SELECT
+        c.contact_id,
+        c.level,
+        c.has_app,
+        c.created_at,
+        d.status as last_delivery_status,
+        d.sent_at as last_sent_at,
+        d.error_message as last_error
+      FROM contacts c
+      LEFT JOIN (
+        SELECT
+          contact_id,
+          status,
+          sent_at,
+          error_message,
+          ROW_NUMBER() OVER (PARTITION BY contact_id ORDER BY created_at DESC) as rn
+        FROM alert_deliveries
+      ) d ON c.contact_id = d.contact_id AND d.rn = 1
+      WHERE c.user_id = ?
+      ORDER BY c.level ASC, c.created_at ASC
+    `).bind(user.user_id).all();
+
     return c.json({
-      contacts: contacts.results.map(c => ({
-        contact_id: c.contact_id,
-        level: c.level,
-        has_app: c.has_app === 1,
-        created_at: c.created_at
+      contacts: contacts.results.map((contact: any) => ({
+        contact_id: contact.contact_id,
+        level: contact.level,
+        has_app: contact.has_app === 1,
+        created_at: contact.created_at,
+        last_delivery: contact.last_delivery_status ? {
+          status: contact.last_delivery_status,
+          sent_at: contact.last_sent_at,
+          error: contact.last_error
+        } : null
       })),
       count: contacts.results.length
     });
-    
+
   } catch (error) {
     console.error('Get contacts error:', error);
     return c.json({ error: 'Failed to get contacts' }, 500);

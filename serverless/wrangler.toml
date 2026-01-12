@@ -14,6 +14,12 @@ database_id = "YOUR_DATABASE_ID_HERE"  # Replace after running: wrangler d1 crea
 # - TWILIO_ACCOUNT_SID: Twilio account SID
 # - TWILIO_AUTH_TOKEN: Twilio auth token
 # - TWILIO_PHONE_NUMBER: Twilio phone number in E.164 format
+#
+# APNs Push Notification secrets (optional):
+# - APNS_KEY_ID: Key ID from Apple Developer Portal
+# - APNS_TEAM_ID: Team ID from Apple Developer Portal
+# - APNS_PRIVATE_KEY: Contents of .p8 private key file (with newlines)
+# - APNS_BUNDLE_ID: App bundle identifier (e.g., com.yourcompany.areyousafe)
 
 # Cron triggers for scheduled tasks
 [triggers]

@@ -9,6 +9,11 @@ export interface Env {
   TWILIO_ACCOUNT_SID: string;
   TWILIO_AUTH_TOKEN: string;
   TWILIO_PHONE_NUMBER: string;
+  // APNs configuration
+  APNS_KEY_ID: string;
+  APNS_TEAM_ID: string;
+  APNS_PRIVATE_KEY: string;
+  APNS_BUNDLE_ID: string;
 }
 
 // Database models
@@ -24,6 +29,7 @@ export interface User {
   sms_alerts_enabled: number;
   pause_until: string | null;
   auth_token: string;
+  apns_token: string | null; // APNs device token for remote push
   created_at: string;
   updated_at: string;
 }
@@ -34,6 +40,8 @@ export interface Contact {
   phone_enc: string;
   level: number;
   has_app: number;
+  apns_token: string | null;
+  linked_user_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -93,6 +101,11 @@ export interface RegisterRequest {
   schedule_times?: string[];
   grace_minutes?: number;
   sms_alerts_enabled?: boolean;
+  apns_token?: string; // APNs device token for remote push
+}
+
+export interface UpdateTokenRequest {
+  apns_token: string;
 }
 
 export interface RegisterResponse {
